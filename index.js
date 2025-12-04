@@ -3,7 +3,7 @@ import { MongoClient } from "mongodb";
 export class WorkflowNotFound extends Error {
   constructor(workflowId) {
     super(`workflow not found: ${workflowId}`);
-    this.name = 'WorkflowNotFound';
+    this.name = "WorkflowNotFound";
     this.workflowId = workflowId;
   }
 }
@@ -11,7 +11,7 @@ export class WorkflowNotFound extends Error {
 export class HandlerNotFound extends Error {
   constructor(handlerId) {
     super(`handler not found: ${handlerId}`);
-    this.name = 'HandlerNotFound';
+    this.name = "HandlerNotFound";
     this.handlerId = handlerId;
   }
 }
@@ -19,27 +19,27 @@ export class HandlerNotFound extends Error {
 export class WaitTimeout extends Error {
   constructor(workflowId) {
     super(`wait timeout: ${workflowId}`);
-    this.name = 'WaitTimeout';
+    this.name = "WaitTimeout";
     this.workflowId = workflowId;
   }
 }
 
 export class Bluestreak {
-  #dbUrl
-  #dbName
-  #client
-  #workflows
-  #timeoutInterval
-  #pollInterval
-  #waitRetryInterval
-  #errorCallback
-  #maxFailures
-  #shouldStop
-  #handlers
+  #dbUrl;
+  #dbName;
+  #client;
+  #workflows;
+  #timeoutInterval;
+  #pollInterval;
+  #waitRetryInterval;
+  #errorCallback;
+  #maxFailures;
+  #shouldStop;
+  #handlers;
 
   constructor(params) {
-    this.#dbUrl = params.dbUrl || 'mongodb://localhost:27017';
-    this.#dbName = params.dbName || 'bluestreak';
+    this.#dbUrl = params.dbUrl || "mongodb://localhost:27017";
+    this.#dbName = params.dbName || "bluestreak";
     this.#client = null;
     this.#workflows = null;
     this.#timeoutInterval = params.timeoutInterval || 10_000;
@@ -58,7 +58,7 @@ export class Bluestreak {
   async init() {
     this.#client = new MongoClient(this.#dbUrl);
     const db = this.#client.db(this.#dbName);
-    this.#workflows = db.collection('workflows');
+    this.#workflows = db.collection("workflows");
     await this.#workflows.createIndex({ id: 1 }, { unique: true });
     await this.#workflows.createIndex({ status: 1, timeoutAt: 1 });
   }
@@ -82,7 +82,7 @@ export class Bluestreak {
   async wait(workflowId, retries, pauseInterval) {
     for (let i = 0; i < retries; i++) {
       const data = await this.#findStatusAndResult(workflowId);
-      if (data.status === 'finished') {
+      if (data.status === "finished") {
         return data.result;
       }
       await this.#goSleep(pauseInterval);
@@ -93,7 +93,7 @@ export class Bluestreak {
   async poll() {
     return new Promise(async (resolve, reject) => {
       let hasRejected = false;
-      while(!this.#shouldStop()) {
+      while (!this.#shouldStop()) {
         const workflowId = await this.#claim();
         if (workflowId) {
           this.#run(workflowId).catch((err) => {
@@ -121,7 +121,7 @@ export class Bluestreak {
     }
     const ctx = {
       step: this.#step(workflowId).bind(this),
-      sleep: this.#sleep(workflowId).bind(this)
+      sleep: this.#sleep(workflowId).bind(this),
     };
     let result;
     try {
@@ -154,7 +154,7 @@ export class Bluestreak {
       const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
       await this.#updateOutput(workflowId, stepId, output, timeoutAt);
       return output;
-    }
+    };
   }
 
   #sleep(workflowId) {
@@ -172,7 +172,7 @@ export class Bluestreak {
       const timeoutAt = new Date(wakeUpAt.getTime() + this.#timeoutInterval);
       await this.#updateWakeUpAt(workflowId, napId, wakeUpAt, timeoutAt);
       await this.#goSleep(ms);
-    }
+    };
   }
 
   async #insert(workflowId, handlerId, input) {
@@ -198,7 +198,7 @@ export class Bluestreak {
           _id: 0,
           [`steps.${stepId}`]: 1,
         },
-      },
+      }
     );
     if (workflow && workflow.steps) {
       return workflow.steps[stepId];
@@ -216,7 +216,7 @@ export class Bluestreak {
           _id: 0,
           [`naps.${napId}`]: 1,
         },
-      },
+      }
     );
     if (workflow && workflow.naps) {
       return workflow.naps[napId];
@@ -236,7 +236,7 @@ export class Bluestreak {
           input: 1,
           failures: 1,
         },
-      },
+      }
     );
     if (workflow) {
       return {
@@ -257,16 +257,16 @@ export class Bluestreak {
         projection: {
           _id: 0,
           status: 1,
-          result: 1
+          result: 1,
         },
-      },
+      }
     );
     if (!workflow) {
       throw new WorkflowNotFound(workflowId);
     }
     return {
       status: workflow.status,
-      result: workflow.result
+      result: workflow.result,
     };
   }
 
@@ -289,7 +289,7 @@ export class Bluestreak {
           _id: 0,
           id: 1,
         },
-      },
+      }
     );
     return workflow?.id;
   }
@@ -302,9 +302,9 @@ export class Bluestreak {
       {
         $set: {
           status: "finished",
-          result
+          result,
         },
-      },
+      }
     );
   }
 
@@ -317,9 +317,9 @@ export class Bluestreak {
         $set: {
           status,
           timeoutAt,
-          failures
+          failures,
         },
-      },
+      }
     );
   }
 
@@ -333,7 +333,7 @@ export class Bluestreak {
           [`steps.${stepId}`]: output,
           timeoutAt,
         },
-      },
+      }
     );
   }
 
@@ -347,13 +347,15 @@ export class Bluestreak {
           [`naps.${napId}`]: wakeUpAt,
           timeoutAt,
         },
-      },
+      }
     );
   }
 
   async #goSleep(pause) {
     return new Promise((resolve) => {
-      setTimeout(() => { resolve(); }, pause);
+      setTimeout(() => {
+        resolve();
+      }, pause);
     });
   }
 }
