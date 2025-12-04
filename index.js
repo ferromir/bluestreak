@@ -29,12 +29,12 @@ export class Bluestreak {
   #dbName
   #client
   #workflows
-  #shouldStop
   #timeoutInterval
   #pollInterval
   #waitRetryInterval
-  #errorHandler
+  #errorCallback
   #maxFailures
+  #shouldStop
   #handlers
 
   constructor(params) {
@@ -42,13 +42,17 @@ export class Bluestreak {
     this.#dbName = params.dbName || 'bluestreak';
     this.#client = null;
     this.#workflows = null;
-    this.#shouldStop = params.shouldStop;
     this.#timeoutInterval = params.timeoutInterval || 10_000;
     this.#pollInterval = params.pollInterval || 5_000;
     this.#waitRetryInterval = params.waitRetryInterval || 1_000;
-    this.#errorHandler = params.errorHandler;
+    this.#errorCallback = params.errorCallback;
     this.#maxFailures = params.maxFailures;
+    this.#shouldStop = params.shouldStop;
     this.#handlers = new Map();
+  }
+
+  registerHandler(handlerId, handler) {
+    this.#handlers.set(handlerId, handler);
   }
 
   async init() {
@@ -61,10 +65,6 @@ export class Bluestreak {
 
   async close() {
     await this.#client.close();
-  }
-
-  registerHandler(handlerId, handler) {
-    this.#handlers.set(handlerId, handler);
   }
 
   async start(workflowId, handlerId, input) {
@@ -91,14 +91,23 @@ export class Bluestreak {
   }
 
   async poll() {
-    while(!this.#shouldStop()) {
-      const workflowId = await this.#claim();
-      if (workflowId) {
-        this.#run(workflowId);
-      } else {
-        await this.#goSleep(this.#pollInterval);
+    return new Promise(async (resolve, reject) => {
+      let hasRejected = false;
+      while(!this.#shouldStop()) {
+        const workflowId = await this.#claim();
+        if (workflowId) {
+          this.#run(workflowId).catch((err) => {
+            if (!hasRejected) {
+              hasRejected = true;
+              reject(err);
+            }
+          });
+        } else {
+          await this.#goSleep(this.#pollInterval);
+        }
       }
-    }
+      resolve();
+    });
   }
 
   async #run(workflowId) {
@@ -114,33 +123,37 @@ export class Bluestreak {
       step: this.#step(workflowId).bind(this),
       sleep: this.#sleep(workflowId).bind(this)
     };
+    let result;
     try {
-      const result = await handler(ctx, runData.input);
-      await this.#setAsFinished(workflowId, result);
+      result = await handler(ctx, runData.input);
     } catch (err) {
       const failures = runData.failures + 1;
-      // if maxFailures is undefined, it will never be aborted.
-      const status = failures > this.#maxFailures ? "aborted" : "failed";
+      let status = "failed";
+      if (this.#maxFailures !== undefined && failures > this.#maxFailures) {
+        status = "aborted";
+      }
       const now = new Date();
       const timeoutAt = new Date(now.getTime() + this.#waitRetryInterval);
       await this.#updateStatus(workflowId, status, timeoutAt, failures);
-      if (this.#errorHandler) {
-        this.#errorHandler(workflowId, err);
+      if (this.#errorCallback) {
+        this.#errorCallback(workflowId, err);
       }
+      return;
     }
+    await this.#setAsFinished(workflowId, result);
   }
 
   #step(workflowId) {
     return async function (stepId, fn) {
       let output = await this.#findOutput(workflowId, stepId);
-      if (!(output === undefined)) {
+      if (output !== undefined) {
         return output;
       }
       output = await fn();
       const now = new Date();
       const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
       await this.#updateOutput(workflowId, stepId, output, timeoutAt);
-      return output;      
+      return output;
     }
   }
 
@@ -158,16 +171,20 @@ export class Bluestreak {
       wakeUpAt = new Date(now.getTime() + ms);
       const timeoutAt = new Date(wakeUpAt.getTime() + this.#timeoutInterval);
       await this.#updateWakeUpAt(workflowId, napId, wakeUpAt, timeoutAt);
-      await this.#goSleep(ms);      
+      await this.#goSleep(ms);
     }
   }
 
   async #insert(workflowId, handlerId, input) {
+    const now = new Date();
+    const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
     await this.#workflows.insertOne({
       id: workflowId,
       handlerId: handlerId,
       input,
+      failures: 0,
       status: "idle",
+      timeoutAt,
     });
   }
 
@@ -228,7 +245,7 @@ export class Bluestreak {
         failures: workflow.failures,
       };
     }
-    return undefined;
+    throw new WorkflowNotFound(workflowId);
   }
 
   async #findStatusAndResult(workflowId) {
@@ -336,7 +353,7 @@ export class Bluestreak {
 
   async #goSleep(pause) {
     return new Promise((resolve) => {
-      setTimeout(() => { resolve()}, pause);
+      setTimeout(() => { resolve(); }, pause);
     });
   }
 }
