@@ -23,6 +23,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -30,6 +31,7 @@
     "mongodb": "^6.10.0"
   },
   "devDependencies": {
+    "jest": "^30.2.0",
     "prettier": "^3.7.4"
   }
 }

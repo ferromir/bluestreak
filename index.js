@@ -24,6 +24,14 @@ export class WaitTimeout extends Error {
   }
 }
 
+export class WorkflowAlreadyStarted extends Error {
+  constructor(workflowId) {
+    super(`workflow already started: ${workflowId}`);
+    this.name = "WorkflowAlreadyStarted";
+    this.workflowId = workflowId;
+  }
+}
+
 export class Bluestreak {
   #dbUrl;
   #dbName;
@@ -70,10 +78,9 @@ export class Bluestreak {
   async start(workflowId, handlerId, input) {
     try {
       await this.#insert(workflowId, handlerId, input);
-      return true;
     } catch (err) {
       if (err.name === "MongoServerError" && err.code === 11000) {
-        return false;
+        throw new WorkflowAlreadyStarted(workflowId);
       }
       throw err;
     }
@@ -177,14 +184,13 @@ export class Bluestreak {
 
   async #insert(workflowId, handlerId, input) {
     const now = new Date();
-    const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
     await this.#workflows.insertOne({
       id: workflowId,
       handlerId: handlerId,
       input,
       failures: 0,
       status: "idle",
-      timeoutAt,
+      timeoutAt: now,
     });
   }
 
