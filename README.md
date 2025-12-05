@@ -1,4 +1,4 @@
-# bluestreak
+# Bluestreak
 
 [![CI](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml/badge.svg)](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml)
 [![Coverage](.github/badges/coverage.svg)](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml)
@@ -13,6 +13,7 @@ Lightweight durable execution powered by MongoDB
 Bluestreak is a lightweight durable execution library that enables you to build reliable, long-running workflows using just MongoDB. It provides the core capabilities of durable execution frameworks like Temporal or AWS Step Functions, but with dramatically simpler deployment and operational requirements.
 
 **Durable execution** means your workflows can:
+
 - Survive crashes and restarts
 - Automatically retry failed operations
 - Execute idempotent steps that safely replay
@@ -205,11 +206,13 @@ The poll loop is what executes workflows. It continuously:
 ```javascript
 let running = true;
 
-bluestreak.poll({
-  shouldStop: () => !running,
-}).catch((err) => {
-  console.error("Poll loop error:", err);
-});
+bluestreak
+  .poll({
+    shouldStop: () => !running,
+  })
+  .catch((err) => {
+    console.error("Poll loop error:", err);
+  });
 
 // Gracefully stop polling
 process.on("SIGTERM", () => {
@@ -257,6 +260,7 @@ const bluestreak = new Bluestreak({
 Creates a new Bluestreak instance.
 
 **Parameters:**
+
 - `dbUrl` (string, optional): MongoDB connection URL. Default: `"mongodb://localhost:27017"`
 - `dbName` (string, optional): MongoDB database name. Default: `"bluestreak"`
 - `timeoutInterval` (number, optional): Timeout for workflow execution in ms. Default: `10000`
@@ -271,6 +275,7 @@ Creates a new Bluestreak instance.
 Registers a workflow handler.
 
 **Parameters:**
+
 - `handlerId` (string): Unique identifier for the handler
 - `handler` (function): Handler function with signature `(ctx, input) => Promise<any>`
 
@@ -287,11 +292,13 @@ Closes the MongoDB connection.
 Starts a new workflow execution.
 
 **Parameters:**
+
 - `workflowId` (string): Unique identifier for this workflow instance
 - `handlerId` (string): ID of the registered handler to execute
 - `input` (any): Input data passed to the handler
 
 **Throws:**
+
 - `WorkflowAlreadyStarted`: If a workflow with the same ID already exists
 
 #### `async wait(workflowId, retries, pauseInterval)`
@@ -299,6 +306,7 @@ Starts a new workflow execution.
 Waits for a workflow to complete by polling its status.
 
 **Parameters:**
+
 - `workflowId` (string): ID of the workflow to wait for
 - `retries` (number): Number of times to check status
 - `pauseInterval` (number): Milliseconds to wait between checks
@@ -306,6 +314,7 @@ Waits for a workflow to complete by polling its status.
 **Returns:** The result returned by the workflow handler
 
 **Throws:**
+
 - `WaitTimeout`: If workflow doesn't complete within retry limit
 - `WorkflowNotFound`: If workflow doesn't exist
 
@@ -314,6 +323,7 @@ Waits for a workflow to complete by polling its status.
 Starts the workflow execution loop. Continues until `shouldStop()` returns true.
 
 **Throws:**
+
 - `HandlerNotFound`: If a workflow references an unregistered handler
 - `WorkflowNotFound`: If a claimed workflow is not found
 
@@ -326,6 +336,7 @@ The context object (`ctx`) passed to workflow handlers provides:
 Executes an idempotent step.
 
 **Parameters:**
+
 - `stepId` (string): Unique identifier for this step within the workflow
 - `fn` (function): Async function to execute. Signature: `() => Promise<any>`
 
@@ -336,6 +347,7 @@ Executes an idempotent step.
 Sleeps for a duration.
 
 **Parameters:**
+
 - `napId` (string): Unique identifier for this sleep within the workflow
 - `ms` (number): Milliseconds to sleep
 
@@ -486,6 +498,7 @@ const bluestreak = new Bluestreak({
 ```
 
 **Workflow States:**
+
 - `idle` - Waiting to be claimed
 - `running` - Currently executing
 - `failed` - Failed but will retry
