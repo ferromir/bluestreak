@@ -51,7 +51,13 @@ global.setTimeout = jest.fn((fn) => {
 });
 
 // Import after mocking
-const { Bluestreak, WorkflowNotFound, HandlerNotFound, WaitTimeout, WorkflowAlreadyStarted } = await import("./index.js");
+const {
+  Bluestreak,
+  WorkflowNotFound,
+  HandlerNotFound,
+  WaitTimeout,
+  WorkflowAlreadyStarted,
+} = await import("./index.js");
 
 describe("Bluestreak", () => {
   let bluestreak;
@@ -279,10 +285,9 @@ describe("Bluestreak", () => {
       await bluestreak.poll();
 
       expect(mockCollection.findOneAndUpdate).toHaveBeenCalled();
-      expect(handler).toHaveBeenCalledWith(
-        expect.any(Object),
-        { data: "test" }
-      );
+      expect(handler).toHaveBeenCalledWith(expect.any(Object), {
+        data: "test",
+      });
       expect(mockCollection.updateOne).toHaveBeenCalledWith(
         { id: "workflow-1" },
         { $set: { status: "finished", result: "result" } }

@@ -1,6 +1,12 @@
 import { MongoClient } from "mongodb";
 
+/**
+ * Error thrown when a workflow is not found in the database.
+ */
 export class WorkflowNotFound extends Error {
+  /**
+   * @param {string} workflowId - The ID of the workflow that was not found
+   */
   constructor(workflowId) {
     super(`workflow not found: ${workflowId}`);
     this.name = "WorkflowNotFound";
@@ -8,7 +14,13 @@ export class WorkflowNotFound extends Error {
   }
 }
 
+/**
+ * Error thrown when a handler is not registered.
+ */
 export class HandlerNotFound extends Error {
+  /**
+   * @param {string} handlerId - The ID of the handler that was not found
+   */
   constructor(handlerId) {
     super(`handler not found: ${handlerId}`);
     this.name = "HandlerNotFound";
@@ -16,7 +28,13 @@ export class HandlerNotFound extends Error {
   }
 }
 
+/**
+ * Error thrown when waiting for a workflow to complete times out.
+ */
 export class WaitTimeout extends Error {
+  /**
+   * @param {string} workflowId - The ID of the workflow that timed out
+   */
   constructor(workflowId) {
     super(`wait timeout: ${workflowId}`);
     this.name = "WaitTimeout";
@@ -24,7 +42,13 @@ export class WaitTimeout extends Error {
   }
 }
 
+/**
+ * Error thrown when attempting to start a workflow that already exists.
+ */
 export class WorkflowAlreadyStarted extends Error {
+  /**
+   * @param {string} workflowId - The ID of the workflow that already exists
+   */
   constructor(workflowId) {
     super(`workflow already started: ${workflowId}`);
     this.name = "WorkflowAlreadyStarted";
@@ -32,6 +56,48 @@ export class WorkflowAlreadyStarted extends Error {
   }
 }
 
+/**
+ * @typedef {Object} WorkflowContext
+ * @property {(stepId: string, fn: () => Promise<any>) => Promise<any>} step - Execute an idempotent step
+ * @property {(napId: string, ms: number) => Promise<void>} sleep - Sleep for a duration
+ */
+
+/**
+ * @callback WorkflowHandler
+ * @param {WorkflowContext} ctx - The workflow context with step and sleep methods
+ * @param {any} input - The input data passed to the workflow
+ * @returns {Promise<any>} The result of the workflow execution
+ */
+
+/**
+ * @callback ErrorCallback
+ * @param {string} workflowId - The ID of the workflow that encountered an error
+ * @param {Error} error - The error that occurred
+ */
+
+/**
+ * @callback ShouldStopCallback
+ * @returns {boolean} Whether the poll loop should stop
+ */
+
+/**
+ * @typedef {Object} BluestreakParams
+ * @property {string} [dbUrl="mongodb://localhost:27017"] - MongoDB connection URL
+ * @property {string} [dbName="bluestreak"] - MongoDB database name
+ * @property {number} [timeoutInterval=10000] - Timeout interval in milliseconds for workflow execution
+ * @property {number} [pollInterval=5000] - Interval in milliseconds between poll attempts when no workflows are available
+ * @property {number} [waitRetryInterval=1000] - Interval in milliseconds before retrying a failed workflow
+ * @property {ErrorCallback} [errorCallback] - Callback invoked when a workflow handler throws an error
+ * @property {number} [maxFailures] - Maximum number of failures before aborting a workflow
+ * @property {ShouldStopCallback} [shouldStop] - Callback to determine when to stop polling
+ */
+
+/**
+ * Bluestreak - A lightweight durable execution library.
+ *
+ * Provides durable workflow execution with automatic retries, idempotent steps,
+ * and persistent state storage using MongoDB.
+ */
 export class Bluestreak {
   #dbUrl;
   #dbName;
@@ -45,6 +111,11 @@ export class Bluestreak {
   #shouldStop;
   #handlers;
 
+  /**
+   * Creates a new Bluestreak instance.
+   *
+   * @param {BluestreakParams} params - Configuration parameters
+   */
   constructor(params) {
     this.#dbUrl = params.dbUrl || "mongodb://localhost:27017";
     this.#dbName = params.dbName || "bluestreak";
@@ -59,10 +130,21 @@ export class Bluestreak {
     this.#handlers = new Map();
   }
 
+  /**
+   * Registers a workflow handler that can be invoked by workflow executions.
+   *
+   * @param {string} handlerId - Unique identifier for the handler
+   * @param {WorkflowHandler} handler - The handler function to execute workflows
+   */
   registerHandler(handlerId, handler) {
     this.#handlers.set(handlerId, handler);
   }
 
+  /**
+   * Initializes the MongoDB connection and creates required indexes.
+   *
+   * @returns {Promise<void>}
+   */
   async init() {
     this.#client = new MongoClient(this.#dbUrl);
     const db = this.#client.db(this.#dbName);
@@ -71,10 +153,24 @@ export class Bluestreak {
     await this.#workflows.createIndex({ status: 1, timeoutAt: 1 });
   }
 
+  /**
+   * Closes the MongoDB connection.
+   *
+   * @returns {Promise<void>}
+   */
   async close() {
     await this.#client.close();
   }
 
+  /**
+   * Starts a new workflow execution.
+   *
+   * @param {string} workflowId - Unique identifier for the workflow
+   * @param {string} handlerId - The ID of the handler to execute
+   * @param {any} input - Input data to pass to the workflow handler
+   * @returns {Promise<void>}
+   * @throws {WorkflowAlreadyStarted} If a workflow with the same ID already exists
+   */
   async start(workflowId, handlerId, input) {
     try {
       await this.#insert(workflowId, handlerId, input);
@@ -86,6 +182,16 @@ export class Bluestreak {
     }
   }
 
+  /**
+   * Waits for a workflow to complete by polling its status.
+   *
+   * @param {string} workflowId - The ID of the workflow to wait for
+   * @param {number} retries - Number of times to check the workflow status
+   * @param {number} pauseInterval - Milliseconds to wait between retries
+   * @returns {Promise<any>} The result of the workflow execution
+   * @throws {WaitTimeout} If the workflow doesn't complete within the retry limit
+   * @throws {WorkflowNotFound} If the workflow doesn't exist
+   */
   async wait(workflowId, retries, pauseInterval) {
     for (let i = 0; i < retries; i++) {
       const data = await this.#findStatusAndResult(workflowId);
@@ -97,6 +203,18 @@ export class Bluestreak {
     throw new WaitTimeout(workflowId);
   }
 
+  /**
+   * Starts the workflow execution loop that claims and processes workflows.
+   *
+   * The loop runs until the shouldStop callback returns true. Workflows are
+   * executed in a fire-and-forget pattern. Handler errors trigger retries,
+   * while infrastructure errors (HandlerNotFound, WorkflowNotFound) will
+   * reject the promise and stop the loop.
+   *
+   * @returns {Promise<void>}
+   * @throws {HandlerNotFound} If a workflow references a non-existent handler
+   * @throws {WorkflowNotFound} If a claimed workflow is not found
+   */
   async poll() {
     return new Promise(async (resolve, reject) => {
       let hasRejected = false;
