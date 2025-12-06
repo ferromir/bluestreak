@@ -43,20 +43,6 @@ export class WaitTimeout extends Error {
 }
 
 /**
- * Error thrown when attempting to start a workflow that already exists.
- */
-export class WorkflowAlreadyStarted extends Error {
-  /**
-   * @param {string} workflowId - The ID of the workflow that already exists
-   */
-  constructor(workflowId) {
-    super(`workflow already started: ${workflowId}`);
-    this.name = "WorkflowAlreadyStarted";
-    this.workflowId = workflowId;
-  }
-}
-
-/**
  * @typedef {Object} WorkflowContext
  * @property {(stepId: string, fn: () => Promise<any>) => Promise<any>} step - Execute an idempotent step
  * @property {(napId: string, ms: number) => Promise<void>} sleep - Sleep for a duration
@@ -103,6 +89,8 @@ export class Bluestreak {
   #dbName;
   #client;
   #workflows;
+  #steps;
+  #naps;
   #timeoutInterval;
   #pollInterval;
   #waitRetryInterval;
@@ -121,6 +109,8 @@ export class Bluestreak {
     this.#dbName = params.dbName || "bluestreak";
     this.#client = null;
     this.#workflows = null;
+    this.#steps = null;
+    this.#naps = null;
     this.#timeoutInterval = params.timeoutInterval || 10_000;
     this.#pollInterval = params.pollInterval || 5_000;
     this.#waitRetryInterval = params.waitRetryInterval || 1_000;
@@ -128,6 +118,17 @@ export class Bluestreak {
     this.#maxFailures = params.maxFailures;
     this.#shouldStop = params.shouldStop;
     this.#handlers = new Map();
+  }
+
+  getParams() {
+    return {
+      dbUrl: this.#dbUrl,
+      dbName: this.#dbName,
+      timeoutInterval: this.#timeoutInterval,
+      pollInterval: this.#pollInterval,
+      waitRetryInterval: this.#waitRetryInterval,
+      maxFailures: this.#maxFailures,
+    };
   }
 
   /**
@@ -143,14 +144,23 @@ export class Bluestreak {
   /**
    * Initializes the MongoDB connection and creates required indexes.
    *
+   * Creates three collections:
+   * - workflows: Stores workflow state (status, timeoutAt, failures, input, result)
+   * - steps: Stores individual step outputs separately to avoid document size limits
+   * - naps: Stores sleep/nap state separately to avoid document size limits
+   *
    * @returns {Promise<void>}
    */
   async init() {
     this.#client = new MongoClient(this.#dbUrl);
     const db = this.#client.db(this.#dbName);
     this.#workflows = db.collection("workflows");
-    await this.#workflows.createIndex({ id: 1 }, { unique: true });
+    await this.#workflows.createIndex({ workflowId: 1 }, { unique: true });
     await this.#workflows.createIndex({ status: 1, timeoutAt: 1 });
+    this.#steps = db.collection("steps");
+    await this.#steps.createIndex({ workflowId: 1, stepId: 1 }, { unique: true });
+    this.#naps = db.collection("naps");
+    await this.#naps.createIndex({ workflowId: 1, napId: 1 }, { unique: true });
   }
 
   /**
@@ -168,18 +178,50 @@ export class Bluestreak {
    * @param {string} workflowId - Unique identifier for the workflow
    * @param {string} handlerId - The ID of the handler to execute
    * @param {any} input - Input data to pass to the workflow handler
-   * @returns {Promise<void>}
-   * @throws {WorkflowAlreadyStarted} If a workflow with the same ID already exists
+   * @returns {Promise<boolean>} Returns true if workflow was created, false if it already exists
    */
   async start(workflowId, handlerId, input) {
     try {
       await this.#insert(workflowId, handlerId, input);
+      return true;
     } catch (err) {
       if (err.name === "MongoServerError" && err.code === 11000) {
-        throw new WorkflowAlreadyStarted(workflowId);
+        return false;
       }
       throw err;
     }
+  }
+
+  /**
+   * Finds a workflow by its ID.
+   *
+   * @param {string} workflowId - The ID of the workflow to find
+   * @returns {Promise<Object|null>} The workflow document or null if not found
+   */
+  async findWorkflow(workflowId) {
+    return await this.#workflows.findOne({ workflowId });
+  }
+
+  /**
+   * Finds a step by workflow ID and step ID.
+   *
+   * @param {string} workflowId - The ID of the workflow
+   * @param {string} stepId - The ID of the step
+   * @returns {Promise<Object|null>} The step document or null if not found
+   */
+  async findStep(workflowId, stepId) {
+    return await this.#steps.findOne({ workflowId, stepId });
+  }
+
+  /**
+   * Finds a nap (sleep) by workflow ID and nap ID.
+   *
+   * @param {string} workflowId - The ID of the workflow
+   * @param {string} napId - The ID of the nap
+   * @returns {Promise<Object|null>} The nap document or null if not found
+   */
+  async findNap(workflowId, napId) {
+    return await this.#naps.findOne({ workflowId, napId });
   }
 
   /**
@@ -235,11 +277,20 @@ export class Bluestreak {
     });
   }
 
+  /**
+   * Executes a workflow handler for the given workflow ID.
+   *
+   * Retrieves the workflow's run data, finds the registered handler, and invokes it.
+   * If the handler throws an error, the workflow is marked as failed or aborted
+   * (depending on maxFailures setting) and will be retried after waitRetryInterval.
+   *
+   * @param {string} workflowId - The ID of the workflow to run
+   * @returns {Promise<void>}
+   * @throws {WorkflowNotFound} If the workflow doesn't exist
+   * @throws {HandlerNotFound} If the handler is not registered
+   */
   async #run(workflowId) {
     const runData = await this.#findRunData(workflowId);
-    if (!runData) {
-      throw new WorkflowNotFound(workflowId);
-    }
     const handler = this.#handlers.get(runData.handlerId);
     if (!handler) {
       throw new HandlerNotFound(runData.handlerId);
@@ -268,6 +319,19 @@ export class Bluestreak {
     await this.#setAsFinished(workflowId, result);
   }
 
+  /**
+   * Creates a step function bound to a specific workflow.
+   *
+   * Steps are idempotent: if a step has already been executed, its cached output
+   * is returned. Otherwise, the function is executed and its output is persisted
+   * in the steps collection before returning.
+   *
+   * Note: Step persistence and timeout updates are not atomic, but this is acceptable
+   * as the worst case is early workflow retry on crash.
+   *
+   * @param {string} workflowId - The ID of the workflow
+   * @returns {Function} A step function that takes (stepId, fn) and returns the step output
+   */
   #step(workflowId) {
     return async function (stepId, fn) {
       let output = await this.#findOutput(workflowId, stepId);
@@ -277,11 +341,25 @@ export class Bluestreak {
       output = await fn();
       const now = new Date();
       const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
-      await this.#updateOutput(workflowId, stepId, output, timeoutAt);
+      await this.#insertStep(workflowId, stepId, output);
+      await this.#updateTimeoutAt(workflowId, timeoutAt);
       return output;
     };
   }
 
+  /**
+   * Creates a sleep function bound to a specific workflow.
+   *
+   * Sleeps are idempotent and durable: if a nap has already been started, it calculates
+   * the remaining sleep time. The wakeUpAt time is persisted in the naps collection to
+   * survive worker restarts.
+   *
+   * Note: Nap persistence and timeout updates are not atomic, but this is acceptable
+   * as the worst case is early workflow retry on crash.
+   *
+   * @param {string} workflowId - The ID of the workflow
+   * @returns {Function} A sleep function that takes (napId, ms) and sleeps for the duration
+   */
   #sleep(workflowId) {
     return async function (napId, ms) {
       let wakeUpAt = await this.#findWakeUpAt(workflowId, napId);
@@ -295,16 +373,26 @@ export class Bluestreak {
       }
       wakeUpAt = new Date(now.getTime() + ms);
       const timeoutAt = new Date(wakeUpAt.getTime() + this.#timeoutInterval);
-      await this.#updateWakeUpAt(workflowId, napId, wakeUpAt, timeoutAt);
+      await this.#insertNap(workflowId, napId, wakeUpAt);
+      await this.#updateTimeoutAt(workflowId, timeoutAt);
       await this.#goSleep(ms);
     };
   }
 
+  /**
+   * Inserts a new workflow into the workflows collection.
+   *
+   * @param {string} workflowId - The unique workflow ID
+   * @param {string} handlerId - The handler ID to execute
+   * @param {any} input - The input data for the workflow
+   * @returns {Promise<void>}
+   * @throws {MongoServerError} If a workflow with the same ID already exists (E11000)
+   */
   async #insert(workflowId, handlerId, input) {
     const now = new Date();
     await this.#workflows.insertOne({
-      id: workflowId,
-      handlerId: handlerId,
+      workflowId,
+      handlerId,
       input,
       failures: 0,
       status: "idle",
@@ -312,46 +400,47 @@ export class Bluestreak {
     });
   }
 
+  /**
+   * Finds the output of a previously executed step.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {string} stepId - The step ID
+   * @returns {Promise<any>} The step output, or undefined if not found
+   */
   async #findOutput(workflowId, stepId) {
-    const workflow = await this.#workflows.findOne(
-      {
-        id: workflowId,
-      },
-      {
-        projection: {
-          _id: 0,
-          [`steps.${stepId}`]: 1,
-        },
-      }
-    );
-    if (workflow && workflow.steps) {
-      return workflow.steps[stepId];
-    }
-    return undefined;
+    const step = await this.#steps.findOne({
+      workflowId,
+      stepId,
+    });
+    return step ? step.output : undefined;
   }
 
+  /**
+   * Finds the wakeUpAt time for a previously started nap.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {string} napId - The nap ID
+   * @returns {Promise<Date|undefined>} The wakeUpAt Date, or undefined if not found
+   */
   async #findWakeUpAt(workflowId, napId) {
-    const workflow = await this.#workflows.findOne(
-      {
-        id: workflowId,
-      },
-      {
-        projection: {
-          _id: 0,
-          [`naps.${napId}`]: 1,
-        },
-      }
-    );
-    if (workflow && workflow.naps) {
-      return workflow.naps[napId];
-    }
-    return undefined;
+    const nap = await this.#naps.findOne({
+      workflowId,
+      napId,
+    });
+    return nap ? nap.wakeUpAt : undefined;
   }
 
+  /**
+   * Finds the data needed to run a workflow (handlerId, input, failures).
+   *
+   * @param {string} workflowId - The workflow ID
+   * @returns {Promise<Object>} Object with handlerId, input, and failures
+   * @throws {WorkflowNotFound} If the workflow doesn't exist
+   */
   async #findRunData(workflowId) {
     const workflow = await this.#workflows.findOne(
       {
-        id: workflowId,
+        workflowId,
       },
       {
         projection: {
@@ -372,10 +461,17 @@ export class Bluestreak {
     throw new WorkflowNotFound(workflowId);
   }
 
+  /**
+   * Finds the status and result of a workflow.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @returns {Promise<Object>} Object with status and result
+   * @throws {WorkflowNotFound} If the workflow doesn't exist
+   */
   async #findStatusAndResult(workflowId) {
     const workflow = await this.#workflows.findOne(
       {
-        id: workflowId,
+        workflowId,
       },
       {
         projection: {
@@ -394,6 +490,15 @@ export class Bluestreak {
     };
   }
 
+  /**
+   * Atomically claims a workflow that is ready to run.
+   *
+   * Looks for workflows with status "idle", "running", or "failed" that have
+   * timed out (timeoutAt < now), updates their status to "running" and sets
+   * a new timeout.
+   *
+   * @returns {Promise<string|undefined>} The workflow ID if claimed, undefined otherwise
+   */
   async #claim() {
     const now = new Date();
     const timeoutAt = new Date(now.getTime() + this.#timeoutInterval);
@@ -411,17 +516,24 @@ export class Bluestreak {
       {
         projection: {
           _id: 0,
-          id: 1,
+          workflowId: 1,
         },
       }
     );
-    return workflow?.id;
+    return workflow?.workflowId;
   }
 
+  /**
+   * Marks a workflow as finished and stores its result.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {any} result - The workflow result
+   * @returns {Promise<void>}
+   */
   async #setAsFinished(workflowId, result) {
     await this.#workflows.updateOne(
       {
-        id: workflowId,
+        workflowId,
       },
       {
         $set: {
@@ -432,10 +544,19 @@ export class Bluestreak {
     );
   }
 
+  /**
+   * Updates the status, timeoutAt, and failure count of a workflow.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {string} status - The new status ("failed" or "aborted")
+   * @param {Date} timeoutAt - The new timeout timestamp
+   * @param {number} failures - The updated failure count
+   * @returns {Promise<void>}
+   */
   async #updateStatus(workflowId, status, timeoutAt, failures) {
     await this.#workflows.updateOne(
       {
-        id: workflowId,
+        workflowId,
       },
       {
         $set: {
@@ -447,39 +568,97 @@ export class Bluestreak {
     );
   }
 
-  async #updateOutput(workflowId, stepId, output, timeoutAt) {
+  /**
+   * Updates only the timeoutAt field of a workflow.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {Date} timeoutAt - The new timeout timestamp
+   * @returns {Promise<void>}
+   */
+  async #updateTimeoutAt(workflowId, timeoutAt) {
     await this.#workflows.updateOne(
       {
-        id: workflowId,
+        workflowId,
       },
       {
         $set: {
-          [`steps.${stepId}`]: output,
           timeoutAt,
         },
       }
     );
   }
 
-  async #updateWakeUpAt(workflowId, napId, wakeUpAt, timeoutAt) {
-    await this.#workflows.updateOne(
+  /**
+   * Inserts a step output into the steps collection using upsert.
+   *
+   * Uses $setOnInsert to make the operation idempotent - if the step already
+   * exists (from a previous attempt before crash), it won't be modified.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {string} stepId - The step ID
+   * @param {any} output - The step output to store
+   * @returns {Promise<void>}
+   */
+  async #insertStep(workflowId, stepId, output) {
+    await this.#steps.updateOne(
       {
-        id: workflowId,
+        workflowId,
+        stepId,
       },
       {
-        $set: {
-          [`naps.${napId}`]: wakeUpAt,
-          timeoutAt,
+        $setOnInsert: {
+          workflowId,
+          stepId,
+          output,
         },
+      },
+      {
+        upsert: true,
       }
     );
   }
 
-  async #goSleep(pause) {
+  /**
+   * Inserts a nap (sleep) into the naps collection using upsert.
+   *
+   * Uses $setOnInsert to make the operation idempotent - if the nap already
+   * exists (from a previous attempt before crash), it won't be modified.
+   *
+   * @param {string} workflowId - The workflow ID
+   * @param {string} napId - The nap ID
+   * @param {Date} wakeUpAt - The time to wake up
+   * @returns {Promise<void>}
+   */
+  async #insertNap(workflowId, napId, wakeUpAt) {
+    await this.#naps.updateOne(
+      {
+        workflowId,
+        napId,
+      },
+      {
+        $setOnInsert: {
+          workflowId,
+          napId,
+          wakeUpAt,
+        },
+      },
+      {
+        upsert: true,
+      }
+    );
+  }
+
+  /**
+   * Sleeps for a specified duration using setTimeout.
+   *
+   * @param {number} pauseInterval - The duration to sleep in milliseconds
+   * @returns {Promise<void>}
+   */
+  async #goSleep(pauseInterval) {
     return new Promise((resolve) => {
       setTimeout(() => {
         resolve();
-      }, pause);
+      }, pauseInterval);
     });
   }
 }

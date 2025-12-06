@@ -2,7 +2,7 @@ export default {
   testEnvironment: "node",
   transform: {},
   testMatch: ["**/*.test.js"],
-  collectCoverageFrom: ["index.js", "index2.js"],
+  collectCoverageFrom: ["index.js"],
   coveragePathIgnorePatterns: ["/node_modules/"],
   testTimeout: 30000,
   coverageThreshold: {

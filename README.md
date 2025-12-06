@@ -12,6 +12,8 @@ Lightweight durable execution powered by MongoDB
 
 Bluestreak is a lightweight durable execution library that enables you to build reliable, long-running workflows using just MongoDB. It provides the core capabilities of durable execution frameworks like Temporal or AWS Step Functions, but with dramatically simpler deployment and operational requirements.
 
+Bluestreak uses a three-collection MongoDB architecture (workflows, steps, naps) that allows workflows to scale without hitting document size limits while maintaining simplicity and performance.
+
 **Durable execution** means your workflows can:
 
 - Survive crashes and restarts
@@ -162,8 +164,9 @@ Steps are the building blocks of workflows. Each step:
 
 - Must have a unique ID within the workflow
 - Executes exactly once (even if the workflow retries)
-- Caches its result in MongoDB
+- Caches its result in a dedicated `steps` collection in MongoDB
 - Returns the cached result on subsequent executions
+- Stored separately from the workflow document to avoid size limits
 
 ```javascript
 // If this workflow crashes after step 1 completes,
@@ -180,6 +183,8 @@ const subscription = await ctx.step("create-subscription", async () => {
 
 **Why steps matter:** Without idempotent steps, a workflow that crashes and retries might create duplicate users, charge credit cards twice, or send multiple emails. Steps prevent this by caching results.
 
+**Storage:** Step outputs are stored in a separate `steps` collection with a compound index on `(workflowId, stepId)`, allowing workflows to have unlimited steps without hitting MongoDB document size limits.
+
 ### Sleep - Durable Delays
 
 Sleep lets workflows pause for arbitrary durations without consuming resources:
@@ -193,6 +198,8 @@ await ctx.sleep("wait-week", 7 * 24 * 60 * 60 * 1000);
 ```
 
 Sleeps are durable - if your process crashes during a sleep, the workflow resumes correctly when the poll loop restarts.
+
+**Storage:** Sleep state (wakeUpAt times) is stored in a separate `naps` collection with a compound index on `(workflowId, napId)`, allowing workflows to have unlimited sleeps without hitting MongoDB document size limits.
 
 ### Polling
 
@@ -281,7 +288,14 @@ Registers a workflow handler.
 
 #### `async init()`
 
-Initializes the MongoDB connection and creates indexes. Must be called before polling or starting workflows.
+Initializes the MongoDB connection and creates required indexes. Must be called before polling or starting workflows.
+
+**Collections created:**
+- `workflows` - Stores workflow metadata (status, timeoutAt, failures, input, result)
+- `steps` - Stores step outputs separately (indexed by workflowId + stepId)
+- `naps` - Stores sleep state separately (indexed by workflowId + napId)
+
+This three-collection architecture prevents workflows from hitting MongoDB's 16MB document size limit.
 
 #### `async close()`
 
@@ -297,9 +311,7 @@ Starts a new workflow execution.
 - `handlerId` (string): ID of the registered handler to execute
 - `input` (any): Input data passed to the handler
 
-**Throws:**
-
-- `WorkflowAlreadyStarted`: If a workflow with the same ID already exists
+**Returns:** `true` if workflow was created, `false` if it already exists
 
 #### `async wait(workflowId, retries, pauseInterval)`
 
@@ -364,10 +376,6 @@ Thrown when a handler ID is not registered.
 #### `WaitTimeout`
 
 Thrown when `wait()` exceeds its retry limit.
-
-#### `WorkflowAlreadyStarted`
-
-Thrown when attempting to start a workflow with a duplicate ID.
 
 ## Examples
 
