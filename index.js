@@ -158,7 +158,10 @@ export class Bluestreak {
     await this.#workflows.createIndex({ workflowId: 1 }, { unique: true });
     await this.#workflows.createIndex({ status: 1, timeoutAt: 1 });
     this.#steps = db.collection("steps");
-    await this.#steps.createIndex({ workflowId: 1, stepId: 1 }, { unique: true });
+    await this.#steps.createIndex(
+      { workflowId: 1, stepId: 1 },
+      { unique: true }
+    );
     this.#naps = db.collection("naps");
     await this.#naps.createIndex({ workflowId: 1, napId: 1 }, { unique: true });
   }

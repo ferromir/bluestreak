@@ -291,6 +291,7 @@ Registers a workflow handler.
 Initializes the MongoDB connection and creates required indexes. Must be called before polling or starting workflows.
 
 **Collections created:**
+
 - `workflows` - Stores workflow metadata (status, timeoutAt, failures, input, result)
 - `steps` - Stores step outputs separately (indexed by workflowId + stepId)
 - `naps` - Stores sleep state separately (indexed by workflowId + napId)
