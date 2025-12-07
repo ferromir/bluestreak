@@ -31,22 +31,3 @@ jobs:
 
       - name: Run tests with coverage
         run: npm run test:coverage
-
-      - name: Generate coverage badge
-        uses: cicirello/jacoco-badge-generator@v2
-        if: matrix.node-version == '20.x' && github.ref == 'refs/heads/main'
-        with:
-          badges-directory: .github/badges
-          generate-coverage-badge: true
-          coverage-badge-filename: coverage.svg
-          generate-branches-badge: true
-          branches-badge-filename: branches.svg
-
-      - name: Commit coverage badges
-        if: matrix.node-version == '20.x' && github.ref == 'refs/heads/main'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .github/badges/*.svg || exit 0
-          git diff --staged --quiet || git commit -m "Update coverage badges [skip ci]"
-          git push || exit 0
