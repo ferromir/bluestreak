@@ -1,0 +1,18 @@
+# Git and GitHub
+.git/
+.github/
+.gitignore
+
+# Tests
+*.test.js
+jest.config.js
+coverage/
+
+# Development
+node_modules/
+.DS_Store
+.vscode/
+.idea/
+
+# Other
+index2.js
