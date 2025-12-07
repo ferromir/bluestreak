@@ -1,7 +1,7 @@
 # Bluestreak
 
-[![CI](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml/badge.svg)](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml)
-[![npm version](https://badge.fury.io/js/bluestreak.svg)](https://www.npmjs.com/package/bluestreak)
+[![CI](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ferromir/bluestreak/actions/workflows/ci.yml)
+[![npm version](https://badge.fury.io/js/%40ferromir%2Fbluestreak.svg)](https://www.npmjs.com/package/@ferromir/bluestreak)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Lightweight durable execution powered by MongoDB
