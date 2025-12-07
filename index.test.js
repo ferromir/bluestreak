@@ -71,9 +71,9 @@ global.setTimeout = jest.fn((fn) => {
 
 // Import after mocking
 const { Bluestreak, WorkflowNotFound, HandlerNotFound, WaitTimeout } =
-  await import("./index2.js");
+  await import("./index.js");
 
-describe("Bluestreak (index2)", () => {
+describe("Bluestreak", () => {
   let bluestreak;
 
   beforeEach(() => {

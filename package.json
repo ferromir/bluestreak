@@ -1,6 +1,6 @@
 {
-  "name": "bluestreak",
-  "version": "1.0.0",
+  "name": "@ferromir/bluestreak",
+  "version": "0.1.0",
   "description": "Lightweight durable execution library",
   "keywords": [
     "durable",
@@ -23,8 +23,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test": "NODE_OPTIONS=--experimental-vm-modules node node_modules/jest/bin/jest.js",
+    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules node node_modules/jest/bin/jest.js --coverage",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

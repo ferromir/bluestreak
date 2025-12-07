@@ -57,7 +57,7 @@ Despite its simplicity, Bluestreak includes essential production features:
 ## Installation
 
 ```bash
-npm install bluestreak
+npm install @ferromir/bluestreak
 ```
 
 ## Quick Start
